@@ -5,6 +5,11 @@
 This repository contains a research-focused implementation of **Smoothed Particle Hydrodynamics (SPH)**. The primary goal is to benchmark and analyze how different optimization strategies perform on modern ARM64 architectures. 
 
 By comparing a scalar **Baseline**, an **OpenMP Multi-threaded** version, and an **ARM NEON SIMD** version, this study quantifies the speedup factors and architectural bottlenecks (cache misses, branch mispredictions, and memory bandwidth) inherent in particle-based simulations.
+I'm using this papers as my reference for my project.
+SPH Fluids in Computer Graphics, State of The Art Report
+https://cg.informatik.uni-freiburg.de/publications/2014_EG_SPH_STAR.pdf
+Particle-Based Fluid Simulation for Interactive Applications
+https://matthias-research.github.io/pages/publications/sca03.pdf
 
 ## 2. Theoretical Foundation
 The physics implementation follows the **2014 Eurographics State-of-the-Art Report (STAR)** on SPH Fluids. The simulation approximates the Navier-Stokes equations by interpolating properties across a set of discrete particles using a kernel function $W(r, h)$.

@@ -1,0 +1,35 @@
+I. The State (Data Structures)
+
+We use a Particle struct. In this baseline, we use an AoS (Array of Structures) layout.
+
+Why? It is intuitive to read. Every "Particle" object holds its own position, velocity, and force.
+
+Performance Note: This is actually "slow" for the CPU because when the CPU only wants to calculate "Density," it still has to load "Velocity" into its cache, wasting space.
+
+II. The Density & Pressure Loop (O(n 
+2
+ ) Complexity)
+
+This is the most mathematically intense part of the code.
+
+The Math: For every particle i, we look at every other particle j. If they are closer than the distance H (the smoothing radius), particle j contributes to the density of particle i.
+
+The Kernel (W): We use a "Weighting Function" (Poly6). Particles very close to each other increase density more than particles far away.
+
+Pressure: Once we know how "crowded" (dense) an area is, we calculate pressure. If density is higher than the REST_DENSITY, the particles will push away from each other.
+
+III. The Force & Integration Loop
+
+This is where the physics actually moves the particles.
+
+Forces: We sum the forces: Gravity (pulling down) + Pressure (pushing particles apart) + Viscosity (friction between particles that makes it look like liquid rather than sand).
+
+Integration (Euler): We use the formula v=v+(f/m)×dt and p=p+v×dt.
+
+f/m is acceleration (Newton's Second Law).
+
+dt is "Delta Time," the tiny slice of time (e.g., 0.003 seconds) between each frame.
+
+IV. Boundary Handling
+
+Because our particles are in a box, we check if their position.y is greater than the floor height. If it is, we reverse their velocity (vel.y *= -0.5f) to make them bounce.

@@ -32,13 +32,16 @@ $$P_i = k(\rho_i - \rho_0)$$
 
 Using the ideal gas law to convert density to pressure, where $k$ is the gas stiffness constant and $\rho_0$ is rest density.
 
-**Step 3: Force Accumulation**
+### Step 3: Force Accumulation
+The total force acting on particle $i$ combines the pressure gradient, viscosity, and external gravity forces:
+
 $$\mathbf{F}_i = -\sum_{j} m_j \left( \frac{P_i}{\rho_i^2} + \frac{P_j}{\rho_j^2} \right) \nabla W(r_{ij}, h) + \mu \sum_{j} m_j \frac{\mathbf{v}_j - \mathbf{v}_i}{\rho_j} \nabla^2 W(r_{ij}, h) + m_i \mathbf{g}$$
 
-Combines pressure gradient, viscosity, and gravity forces.
+### Step 4: Time Integration
+We use a semi-implicit Euler integration to update the velocity and position of each particle:
 
-**Step 4: Time Integration**
 $$\mathbf{v}_{t+\Delta t} = \mathbf{v}_t + \frac{\mathbf{F}_t}{m} \Delta t$$
+
 $$\mathbf{x}_{t+\Delta t} = \mathbf{x}_t + \mathbf{v}_{t+\Delta t} \Delta t$$
 
 Semi-implicit Euler integration for numerical stability.

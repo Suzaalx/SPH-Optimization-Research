@@ -1,1 +1,36 @@
-.git
+# Build artifacts
+*.o
+*.out
+*.exe
+sph_baseline
+sph_baseline_opt
+*.dSYM/
+
+# Documentation (keep README.md, hide review/guide docs)
+CODE_REVIEW.md
+IMPROVEMENTS_EXPLAINED.md
+UNDERSTANDING_GUIDE.md
+
+# Reference files
+reference.c
+
+# Python scripts (if temporary)
+analyze_benchmark.py
+__pycache__/
+*.pyc
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Benchmarks output
+benchmarks/*.csv
+benchmarks/*.json
+benchmarks/*.log

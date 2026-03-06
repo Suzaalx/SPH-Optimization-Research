@@ -1,0 +1,20 @@
+SPH Baseline Improved - Session Log
+================================
+Timestamp: 2026-03-05 19:55:16
+
+Config:
+  particles  = 1500
+  h         = 16
+  restDensity = 1
+  gasConstant = 2000
+  viscosity = 250
+  gravity   = 980
+  dt        = 0.003
+
+Run:
+  total_frames = 940
+  avg_fps      = 6.51
+
+Final particle bounds:
+  x_min = 10.00, x_max = 790.00
+  y_min = 586.03, y_max = 590.00

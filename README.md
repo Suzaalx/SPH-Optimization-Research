@@ -12,6 +12,15 @@ This repository contains a **research-focused implementation of Smoothed Particl
 - How do **memory access patterns** (AoS vs. SoA) affect cache efficiency?
 - What are the architectural bottlenecks in particle-based simulations?
 
+**How we answer these questions**
+
+| Question | How we answer it |
+|----------|-------------------|
+| **OpenMP speedup** | Implement Phase 2 (same code + OpenMP on density/force loops). Measure **FPS** and **frame time** vs. Phase 1. Report **speedup = FPS_OpenMP / FPS_baseline** and **thread scaling** (e.g. 1 vs 2 vs 4 threads). |
+| **SIMD (NEON) gains** | Implement Phase 3 (SoA + NEON intrinsics, single-threaded). Measure **FPS** and **per-loop time** (density, force) vs. Phase 1. Report **speedup** and compare to theoretical 4× from 4-wide floats. |
+| **AoS vs SoA / cache** | Compare **Phase 1 (AoS)** vs **Phase 3 (SoA)** with same particle count. Measure **FPS** and, if available, **cache miss rate** (Instruments, `perf stat`) or **memory bandwidth**. Report how much of the SIMD gain comes from layout vs. vectorization. |
+| **Architectural bottlenecks** | For each phase, log **density loop time**, **force loop time**, **integration time**. If density+force dominate and FPS stops scaling with threads → **memory bandwidth**. If SIMD helps a lot → was **compute-bound**. Use profiling (Instruments, ARM Streamline) to report **cache misses**, **branch mispredictions**, or **memory-bound** stalls. |
+
 By systematically comparing these implementation strategies, this study quantifies speedup factors, identifies performance bottlenecks (cache misses, branch mispredictions, memory bandwidth), and provides insights into efficient scientific computing on Apple Silicon.
 
 ---
@@ -215,6 +224,27 @@ By completing this research project, you'll understand:
 | Phase 4: Combined | 150+ FPS | 7.5x+ | Thermal/frequency |
 
 (Actual results will vary based on particle count and hardware thermal state)
+
+### How metrics should change with multi-threading vs SIMD
+
+**Multi-threading (OpenMP, Phase 2)**  
+- **FPS / frame rate:** Should go **up** by about **2–3×** (e.g. 6 → 15–18 FPS) as work is split across cores.  
+- **Frame time (ms):** Should go **down** by the same factor (e.g. ~150 ms → ~55–75 ms per frame).  
+- **Density/force loop time:** Should drop roughly in proportion to core count (e.g. 4 P-cores → up to ~3–4× faster), but often **less** than 4× because of shared memory bandwidth (“memory wall”).  
+- **Scaling:** Speedup vs. 1 thread often **levels off** as you add threads (e.g. 2× at 2 threads, 2.5× at 4 threads) — indicates bandwidth or cache contention.  
+- **Physics / correctness:** Particle bounds, final puddle shape, and behavior should match the baseline; only speed changes.
+
+**SIMD (NEON, Phase 3)**  
+- **FPS / frame rate:** Should go **up** by about **3–4×** on a single core (e.g. 6 → 18–24 FPS) from processing 4 floats per instruction.  
+- **Frame time (ms):** Should go **down** by the same factor.  
+- **Density/force loop time:** Should drop **~3–4×** for the vectorized parts (same work, fewer instructions).  
+- **Memory layout:** SoA (Structure of Arrays) often improves cache use and can add extra gain on top of raw SIMD.  
+- **Physics / correctness:** Must match baseline; validate with same config and compare final bounds / visual behavior.
+
+**Combined (Phase 4)**  
+- **FPS:** Target **~6–10×** over baseline (e.g. 6 → 40–60 FPS) from both more cores and more work per cycle.  
+- **Scaling:** May be **below** (OpenMP speedup × SIMD speedup) due to bandwidth and cache limits.  
+- **Metrics to log in all phases:** `total_frames`, `avg_fps`, `final particle bounds`, and (if you add timers) **per-phase times** (density, force, integration) so you can see where each optimization helps.
 
 ---
 

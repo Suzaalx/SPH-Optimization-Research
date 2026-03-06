@@ -34,3 +34,4 @@ Thumbs.db
 benchmarks/*.csv
 benchmarks/*.json
 benchmarks/*.log
+sph_improved

@@ -4,6 +4,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <ctime>
+#include <fstream>
+#include <sstream>
+#include <iomanip>
 
 // Particle structure matching reference.c style
 struct Particle {
@@ -38,9 +42,8 @@ struct SPHSettings {
         , h(h)
         , g(g)
     {
-        const float PI = 3.14159265f;
         h2 = h * h;
-        // Precompute kernel constants (matching reference.c)
+        // Precompute kernel constants (matching reference.c); raylib defines PI
         poly6 = 315.0f / (64.0f * PI * powf(h, 9));
         spikyGrad = -45.0f / (PI * powf(h, 6));
         spikyLap = 45.0f / (PI * powf(h, 6));
@@ -71,38 +74,38 @@ float spiky_laplacian(float r_length, const SPHSettings& settings) {
     return settings.spikyLap * (settings.h - r_length);
 }
 
-// Initialize particles in dam break configuration (matching reference.c)
-void initialize_dam_break(std::vector<Particle>& particles, const SPHSettings& settings) {
+// Initialize particles in dam break: 2D block spanning full screen width
+void initialize_dam_break(std::vector<Particle>& particles, const SPHSettings& settings,
+                          float windowWidth, float windowHeight) {
     std::srand(1024);  // Reproducible seed
     
-    // Calculate cube dimensions to get ~1500 particles
-    int cubeWidth = static_cast<int>(std::cbrt(particles.size()));
-    float particleSeparation = settings.h + 0.01f;  // Slight spacing to prevent overlap
+    const float margin = 20.0f;
+    float particleSeparation = settings.h * 0.5f;  // Compact spacing
     
-    // Dam break: particles start in a cube on the left side
-    float startX = 100.0f;
-    float startY = 300.0f;
-    float startZ = 0.0f;  // 2D: z = 0
+    // Columns to span full width; rows for a thick block
+    int cols = (int)((windowWidth - 2.0f * margin) / particleSeparation);
+    int rows = 28;  // Block height in particle rows
+    size_t n = (size_t)cols * (size_t)rows;
+    particles.resize(n);
     
-    int idx = 0;
-    for (int i = 0; i < cubeWidth && idx < particles.size(); i++) {
-        for (int j = 0; j < cubeWidth && idx < particles.size(); j++) {
-            for (int k = 0; k < cubeWidth && idx < particles.size(); k++) {
-                // Small random jitter to prevent clustering artifacts
-                float ranX = (float(std::rand()) / float(RAND_MAX) * 2.0f - 1.0f) * settings.h / 10.0f;
-                float ranY = (float(std::rand()) / float(RAND_MAX) * 2.0f - 1.0f) * settings.h / 10.0f;
-                
-                particles[idx].position = glm::vec2(
-                    startX + i * particleSeparation + ranX,
-                    startY + j * particleSeparation + ranY
-                );
-                particles[idx].velocity = glm::vec2(0.0f);
-                particles[idx].density = 0.0f;
-                particles[idx].pressure = 0.0f;
-                particles[idx].force = glm::vec2(0.0f);
-                idx++;
-            }
-        }
+    float startX = margin;
+    float startY = margin;  // Top of screen
+    
+    for (size_t idx = 0; idx < n; idx++) {
+        int i = (int)(idx % cols);
+        int j = (int)(idx / cols);
+        
+        float ranX = (float(std::rand()) / float(RAND_MAX) * 2.0f - 1.0f) * settings.h * 0.05f;
+        float ranY = (float(std::rand()) / float(RAND_MAX) * 2.0f - 1.0f) * settings.h * 0.05f;
+        
+        particles[idx].position = glm::vec2(
+            startX + i * particleSeparation + ranX,
+            startY + j * particleSeparation + ranY
+        );
+        particles[idx].velocity = glm::vec2(0.0f);
+        particles[idx].density = 0.0f;
+        particles[idx].pressure = 0.0f;
+        particles[idx].force = glm::vec2(0.0f);
     }
 }
 
@@ -149,14 +152,20 @@ int main() {
         980.0f     // gravity (9.8 * 100 for pixel scale)
     );
     
-    int numParticles = 1500;
-    std::vector<Particle> particles(numParticles);
+    int numParticles = 0;  // Set after init (init resizes to fill full width)
+    std::vector<Particle> particles(1);  // Placeholder; init resizes
     
-    // Initialize dam break scenario
-    initialize_dam_break(particles, settings);
+    // Initialize dam break scenario (block spans full width)
+    initialize_dam_break(particles, settings, (float)WINDOW_WIDTH, (float)WINDOW_HEIGHT);
+    numParticles = (int)particles.size();
     
     // Fixed timestep for stability (matching reference.c)
     const float dt = 0.003f;
+    
+    // Session stats for logging on exit
+    int frameCount = 0;
+    float fpsSum = 0.0f;
+    int fpsSamples = 0;
     
     while (!WindowShouldClose()) {
         // ============================================
@@ -180,6 +189,12 @@ int main() {
             
             // Calculate pressure using equation of state
             particles[i].pressure = settings.gasConstant * (particles[i].density - settings.restDensity);
+        }
+        
+        // Clamp minimum density to avoid explosion from division by near-zero
+        for (auto& p : particles) {
+            if (p.density < settings.restDensity * 0.1f)
+                p.density = settings.restDensity * 0.1f;
         }
         
         // ============================================
@@ -232,18 +247,67 @@ int main() {
         // RENDERING
         // ============================================
         BeginDrawing();
-        ClearBackground(BLACK);
+        ClearBackground(WHITE);
         
         // Draw particles
         for (const auto& p : particles) {
-            DrawCircle(p.position.x, p.position.y, 2, BLUE);
+            DrawCircle(p.position.x, p.position.y, 2, PURPLE);
         }
         
         // Draw info
+        float fps = GetFPS();
+        if (fps > 0.0f) { fpsSum += fps; fpsSamples++; }
+        frameCount++;
         DrawFPS(10, 10);
-        DrawText(TextFormat("Particles: %d", numParticles), 10, 30, 20, WHITE);
+        DrawText(TextFormat("Particles: %d", numParticles), 10, 30, 20, BLACK);
+        DrawText(TextFormat("Frames: %d", frameCount), 10, 50, 20, BLACK);
         
         EndDrawing();
+    }
+    
+    // ----- Session log (written when window closes) -----
+    {
+#if defined(_WIN32) || defined(_WIN64)
+        system("mkdir benchmarks 2>nul");
+#else
+        system("mkdir -p benchmarks");
+#endif
+        auto now = std::chrono::system_clock::now();
+        auto t = std::chrono::system_clock::to_time_t(now);
+        std::tm* tm = std::localtime(&t);
+        std::ostringstream fname;
+        fname << "benchmarks/sph_run_" << std::put_time(tm, "%Y%m%d_%H%M%S") << ".log";
+        
+        float minX = 1e9f, maxX = -1e9f, minY = 1e9f, maxY = -1e9f;
+        for (const auto& p : particles) {
+            if (p.position.x < minX) minX = p.position.x;
+            if (p.position.x > maxX) maxX = p.position.x;
+            if (p.position.y < minY) minY = p.position.y;
+            if (p.position.y > maxY) maxY = p.position.y;
+        }
+        float avgFps = (fpsSamples > 0) ? (fpsSum / fpsSamples) : 0.0f;
+        
+        std::ofstream log(fname.str());
+        if (log.is_open()) {
+            log << "SPH Baseline Improved - Session Log\n";
+            log << "================================\n";
+            log << "Timestamp: " << std::put_time(tm, "%Y-%m-%d %H:%M:%S") << "\n\n";
+            log << "Config:\n";
+            log << "  particles  = " << numParticles << "\n";
+            log << "  h         = " << settings.h << "\n";
+            log << "  restDensity = " << settings.restDensity << "\n";
+            log << "  gasConstant = " << settings.gasConstant << "\n";
+            log << "  viscosity = " << settings.viscosity << "\n";
+            log << "  gravity   = " << settings.g << "\n";
+            log << "  dt        = " << dt << "\n\n";
+            log << "Run:\n";
+            log << "  total_frames = " << frameCount << "\n";
+            log << "  avg_fps      = " << std::fixed << std::setprecision(2) << avgFps << "\n\n";
+            log << "Final particle bounds:\n";
+            log << "  x_min = " << minX << ", x_max = " << maxX << "\n";
+            log << "  y_min = " << minY << ", y_max = " << maxY << "\n";
+            log.close();
+        }
     }
     
     CloseWindow();

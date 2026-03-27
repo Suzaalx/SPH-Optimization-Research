@@ -35,3 +35,6 @@ benchmarks/*.csv
 benchmarks/*.json
 benchmarks/*.log
 sph_improved
+sph_omp
+sph_simd
+sph_3d

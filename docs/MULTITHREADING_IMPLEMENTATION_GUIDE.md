@@ -6,7 +6,7 @@ This guide explains how to add multi-threading using **OpenMP** to the baseline 
 
 ## 1. Why the outer loop is safe to parallelize
 
-In your current code:
+In our current code:
 
 - **Density step:** For each `i`, you only **write** to `particles[i].density` and `particles[i].pressure`. You **read** all `particles[j]` (positions). So different `i` values touch different memory; no two threads write the same element.
 - **Force step:** Same: each `i` only **writes** `particles[i].force`; reads are from all `j`.
@@ -231,4 +231,4 @@ for (size_t i = 0; i < particles.size(); i++) {
 | Build | Use a compiler with OpenMP (`-fopenmp`) and link OpenMP if needed (e.g. LLVM’s clang on macOS). |
 | Tune | Use `omp_set_num_threads(N)` or `OMP_NUM_THREADS` to measure scaling (1, 2, 4 threads). |
 
-After this, you can combine with the SIMD (NEON) version: same OpenMP parallelization on the outer loop, with the inner j-loop vectorized (Phase 4).
+After this, we can combine with the SIMD (NEON) version: same OpenMP parallelization on the outer loop, with the inner j-loop vectorized (Phase 4).

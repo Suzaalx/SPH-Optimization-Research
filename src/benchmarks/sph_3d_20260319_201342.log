@@ -1,0 +1,24 @@
+SPH 3D - SIMD Optimized Session Log
+====================================
+Timestamp: 2026-03-19 20:13:42
+
+Config:
+  particles   = 1575
+  h           = 0.8
+  restDensity = 300
+  gasConstant = 500
+  viscosity   = 200
+  gravity     = 9.8
+  dt          = 0.003
+  cubeHalfSize = 3.5
+  cubeRotX    = -1.47263
+  cubeRotZ    = 3.92557
+
+Run:
+  total_frames = 2649
+  avg_fps      = 58.27
+
+Final particle bounds:
+  x: -5.16 .. 5.18
+  y: -5.18 .. 5.17
+  z: -3.83 .. 3.83

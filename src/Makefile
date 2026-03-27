@@ -23,9 +23,13 @@ $(TARGET): $(BENCHMARK_DIR)/main.cpp
 improved:
 	$(CXX) -std=c++17 -O0 -I/opt/homebrew/include -I./include $(BENCHMARK_DIR)/main_improved.cpp -o sph_improved $(LDFLAGS)
 
-# 3D simulation with rotatable cube
+# 3D simulation with rotatable cube (NEON SIMD optimized)
 3d:
-	$(CXX) -std=c++17 -O2 -I/opt/homebrew/include -I./include $(BENCHMARK_DIR)/main_3d.cpp -o sph_3d $(LDFLAGS)
+	$(CXX) -std=c++17 -O2 -mcpu=apple-m1 -I/opt/homebrew/include -I./include $(BENCHMARK_DIR)/main_3d.cpp -o sph_3d $(LDFLAGS)
+
+# Phase 2: OpenMP multi-threaded (-O2, links Homebrew libomp)
+omp:
+	$(CXX) -std=c++17 -O2 -Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include -I/opt/homebrew/include -I./include $(BENCHMARK_DIR)/main_omp.cpp -o sph_omp $(LDFLAGS) -L/opt/homebrew/opt/libomp/lib -lomp
 
 # Phase 3: NEON SIMD (-O2 to allow NEON intrinsic optimization)
 simd:
@@ -37,4 +41,4 @@ opt:
 
 # Clean all build artifacts
 clean:
-	rm -f sph_baseline sph_baseline_opt sph_improved sph_simd sph_3d
+	rm -f sph_baseline sph_baseline_opt sph_improved sph_omp sph_simd sph_3d

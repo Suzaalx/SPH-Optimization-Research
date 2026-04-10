@@ -39,6 +39,10 @@ simd:
 opt:
 	$(CXX) -std=c++17 -O3 $(BENCHMARK_DIR)/main.cpp -o sph_baseline_opt $(LDFLAGS)
 
+# Phase 4: Combined OpenMP + NEON SIMD
+combined:
+	$(CXX) -std=c++17 -O2 -mcpu=apple-m1 -Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include -I/opt/homebrew/include -I./include $(BENCHMARK_DIR)/main_combined.cpp -o sph_combined $(LDFLAGS) -L/opt/homebrew/opt/libomp/lib -lomp
+
 # Clean all build artifacts
 clean:
-	rm -f sph_baseline sph_baseline_opt sph_improved sph_omp sph_simd sph_3d
+	rm -f sph_baseline sph_baseline_opt sph_improved sph_omp sph_simd sph_3d sph_combined

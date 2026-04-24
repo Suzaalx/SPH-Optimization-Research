@@ -49,86 +49,86 @@
 \maketitle
 
 \begin{abstract}
-Smoothed Particle Hydrodynamics (SPH) is a popular method for simulating fluids, but its $O(n^2)$ pairwise particle interactions make it very expensive to run in real time. In this project, we measured how much we can speed up a 2D SPH simulation on the Apple M1 processor using two different optimization approaches: multi-threading with OpenMP and SIMD vectorization with ARM NEON intrinsics. We built four versions of the same simulation---a scalar baseline, an OpenMP-parallelized version, a NEON SIMD version, and a combined version---and benchmarked all of them on the same 2,660-particle dam-break scenario. Our results show that OpenMP with 8 threads reaches 58.89 FPS (a 23.0$\times$ speedup over the unoptimized baseline), while single-threaded NEON SIMD reaches 49.69 FPS (19.4$\times$). The combined approach brings the total physics computation down from 6.169~ms to 3.185~ms per frame. We also found that restructuring particle data from Array of Structures (AoS) to Structure of Arrays (SoA) was critical for making SIMD work well, and that a single SIMD-optimized core can match roughly 85\% of the throughput of 8 threads running on unoptimized memory layouts.
+Smoothed Particle Hydrodynamics (SPH) is a widely used method for simulating fluids, but its $O(n^2)$ pairwise particle interactions make real-time execution expensive. In this project, we quantify how much a 2D SPH simulation can be accelerated on the Apple M1 processor using two complementary optimization strategies: multi-threading with OpenMP and SIMD vectorization with ARM NEON intrinsics. We implemented four versions of the same simulation---a scalar baseline, an OpenMP-parallelized version, a NEON SIMD version, and a combined version---and benchmarked them on an identical 2,660-particle dam-break scenario. Our results show that OpenMP with 8 threads reaches 58.89~FPS (a 23.0$\times$ speedup over the unoptimized baseline), while single-threaded NEON SIMD reaches 49.69~FPS (19.4$\times$). Combining both approaches reduces total physics computation from 6.169~ms to 3.185~ms per frame, a 5.4$\times$ reduction in the density loop alone. A key finding is that restructuring particle data from Array of Structures (AoS) to Structure of Arrays (SoA) was essential for effective vectorization: a single SIMD-optimized core achieves roughly 85\% of the throughput of 8 threads operating on the unoptimized memory layout, demonstrating that memory layout can be as impactful as the choice of parallelization strategy.
 \end{abstract}
 
 \section{Introduction}
 
-Smoothed Particle Hydrodynamics (SPH) is a mesh-free method for simulating fluids where instead of dividing space into a grid, the fluid is represented as a collection of moving particles \cite{muller2003particle}. Each particle carries properties like position, velocity, and density, and the simulation updates these properties every frame based on interactions with nearby particles. SPH works well for things like splashing water and free-surface flows because the particles naturally follow the fluid motion.
+Smoothed Particle Hydrodynamics (SPH) is a mesh-free method for simulating fluids in which the fluid is represented as a collection of moving particles rather than values on a spatial grid \cite{muller2003particle}. Each particle carries properties such as position, velocity, and density, and the simulation updates these properties every frame based on interactions with neighboring particles. SPH is particularly effective for free-surface flows, such as splashing water, because the particles naturally track the fluid motion without requiring explicit surface reconstruction.
 
-The big problem with SPH is performance. To compute each particle's density, we need to check its distance to every other particle and sum up kernel contributions from the ones that are close enough. In a simple (brute-force) implementation, this means an $O(n^2)$ loop---for 2,660 particles, that is about 7 million pair evaluations per frame. The force calculation has the same complexity. These two loops together dominate the runtime.
+The central challenge of SPH is performance. Computing each particle's density requires evaluating its distance to every other particle and summing kernel contributions from those within a smoothing radius. In a brute-force implementation, this is an $O(n^2)$ operation: for 2,660 particles, roughly 7 million pair evaluations per frame. The force calculation has the same complexity, and together these two loops dominate the runtime.
 
-Modern processors like the Apple M1 offer two main ways to make this faster. First, the M1 has 8 CPU cores (4 fast ``Firestorm'' cores and 4 efficient ``Icestorm'' cores), so we can split the work across threads using OpenMP \cite{openmp2018specification}. Second, each core supports 128-bit ARM NEON SIMD instructions that can process 4 single-precision floats at once \cite{arm2020neon}. These two approaches are fundamentally different---one distributes work across cores (task parallelism), and the other makes each core do more work per instruction (data parallelism).
+Modern processors such as the Apple M1 offer two complementary mechanisms to accelerate this workload. First, the M1 has 8 CPU cores (4 high-performance ``Firestorm'' cores and 4 energy-efficient ``Icestorm'' cores), which can be exploited through thread-level parallelism using OpenMP \cite{openmp2018specification}. Second, each core supports 128-bit ARM NEON SIMD instructions capable of processing four single-precision floats simultaneously \cite{arm2020neon}. These approaches are fundamentally different: multi-threading distributes work across cores (task parallelism), while SIMD increases the amount of work performed per instruction (data parallelism).
 
-In this project, we wanted to understand how each of these approaches performs on its own, how they compare to each other, and what happens when we combine them. We also wanted to see how the choice of memory layout (AoS vs.\ SoA) affects the results. To do this, we built four versions of the same SPH simulation and benchmarked them all under identical conditions.
+In this project, we investigate how each of these approaches performs individually, how they compare, and what gains arise when they are combined. We additionally examine how the choice of memory layout---Array of Structures (AoS) versus Structure of Arrays (SoA)---affects cache efficiency and SIMD effectiveness. To answer these questions, we built four versions of the same SPH simulation and benchmarked them under identical conditions.
 
 \subsection{Research Questions}
-Our project targets four questions:
+This work targets four research questions:
 \begin{enumerate}
-    \item How much speedup does multi-threading (OpenMP) provide on ARM64?
-    \item What performance gains come from SIMD vectorization (ARM NEON)?
-    \item How does switching from Array of Structures (AoS) to Structure of Arrays (SoA) affect cache efficiency?
+    \item How much speedup does multi-threading with OpenMP provide for SPH on ARM64?
+    \item What performance gains can be achieved through SIMD vectorization with ARM NEON?
+    \item How does switching from AoS to SoA memory layout affect cache efficiency?
     \item What are the main architectural bottlenecks for particle simulations on Apple Silicon?
 \end{enumerate}
 
 \section{Background}
 
 \subsection{SPH Physics}
-Our simulation follows the standard SPH formulation described by M\"uller et al.\ \cite{muller2003particle} and the Eurographics survey by Koschier et al.\ \cite{koschier2014sph}. Each frame, the simulation runs through three main steps.
+Our simulation follows the standard SPH formulation described by M\"uller et al.\ \cite{muller2003particle} and the Eurographics state-of-the-art survey by Koschier et al.\ \cite{koschier2014sph}. Each frame, the simulation performs three sequential steps.
 
-\textbf{Step 1: Density.} For each particle $i$, we compute its local density by summing kernel contributions from all particles $j$ within the smoothing radius $h$:
+\textbf{Step 1: Density.} For each particle $i$, the local density is computed by summing kernel contributions from all particles $j$ within the smoothing radius $h$:
 \begin{equation}
 \rho_i = \sum_{j=1}^{N} m_j \, W(|\mathbf{r}_i - \mathbf{r}_j|, h)
 \end{equation}
-We use the Poly6 kernel for density because it is smooth and only depends on the squared distance $r^2$ (so we can skip the expensive square root). Once we have density, we convert it to pressure using a simple equation of state:
+We use the Poly6 kernel for density because it is smooth and depends only on the squared distance $r^2$, which avoids the cost of a square-root operation. Density is then converted to pressure using a simple equation of state:
 \begin{equation}
 P_i = k(\rho_i - \rho_0)
 \end{equation}
-where $k = 2000$ is the stiffness constant and $\rho_0 = 1.0$ is the rest density.
+where $k = 2000$ is the gas stiffness constant and $\rho_0 = 1.0$ is the rest density.
 
-\textbf{Step 2: Forces.} Each particle accumulates three forces---pressure, viscosity, and gravity:
+\textbf{Step 2: Forces.} Each particle accumulates three force contributions---pressure, viscosity, and gravity:
 \begin{equation}
 \mathbf{F}_i = -\sum_{j} m_j \left( \frac{P_i}{\rho_i^2} + \frac{P_j}{\rho_j^2} \right) \nabla W_{ij} + \mu \sum_{j} m_j \frac{\mathbf{v}_j - \mathbf{v}_i}{\rho_j} \nabla^2 W_{ij} + m_i \mathbf{g}
 \end{equation}
-The pressure gradient uses the Spiky kernel (which has a sharper peak than Poly6), and viscosity uses the Spiky Laplacian kernel. These kernels are taken directly from M\"uller et al.\ \cite{muller2003particle}.
+The pressure gradient uses the Spiky kernel, which has a sharper peak than Poly6, and viscosity uses the Spiky Laplacian kernel. Both kernels are taken directly from M\"uller et al.\ \cite{muller2003particle}.
 
-\textbf{Step 3: Integration.} We update velocities and positions with semi-implicit Euler:
+\textbf{Step 3: Integration.} Velocities and positions are updated using semi-implicit Euler integration:
 \begin{align}
 \mathbf{v}_{t+\Delta t} &= \mathbf{v}_t + \frac{\mathbf{F}_t}{\rho_i} \Delta t \\
 \mathbf{x}_{t+\Delta t} &= \mathbf{x}_t + \mathbf{v}_{t+\Delta t} \Delta t
 \end{align}
-Boundary collisions are handled by clamping positions and reflecting velocities with a damping factor of 0.5.
+Boundary collisions are handled by clamping positions to the domain and reflecting velocities with a damping factor of 0.5.
 
 \subsection{Apple M1 Architecture}
-The M1 chip \cite{apple2020m1} has a few properties that are relevant to our experiments:
+Several properties of the Apple M1 chip \cite{apple2020m1} are directly relevant to our experiments:
 \begin{itemize}
-    \item \textbf{8 cores:} 4 Firestorm cores at 3.2 GHz and 4 Icestorm cores at 2.0 GHz.
-    \item \textbf{128-bit NEON:} Each core can execute 4-wide float SIMD operations.
-    \item \textbf{Unified memory:} CPU and GPU share the same physical memory, so there are no NUMA penalties when multiple cores access the same data.
-    \item \textbf{Cache hierarchy:} 128 KB L1 data cache per core, up to 12 MB shared L2.
+    \item \textbf{8 CPU cores:} 4 Firestorm performance cores at 3.2~GHz and 4 Icestorm efficiency cores at 2.0~GHz.
+    \item \textbf{128-bit NEON:} Each core supports 4-wide single-precision SIMD operations.
+    \item \textbf{Unified memory:} CPU and GPU share the same physical memory, eliminating NUMA penalties for cross-core data access.
+    \item \textbf{Cache hierarchy:} 128~KB L1 data cache per core and up to 12~MB shared L2 cache.
 \end{itemize}
-The unified memory is a double-edged sword---it avoids the coherency overhead of multi-socket systems, but all 8 cores share the same ~68 GB/s memory bandwidth, which can become a bottleneck under heavy parallel workloads.
+The unified memory architecture is a double-edged sword: it avoids the coherency overhead of multi-socket systems, but all 8 cores share the same $\sim$68~GB/s memory bandwidth, which can become a bottleneck under parallel memory-intensive workloads.
 
 \section{Methodology}
 
-We built four versions of the simulation, each adding one optimization on top of the baseline. Every version uses the exact same physics parameters and the same 2,660-particle dam-break initial condition so we can compare them fairly.
+We implemented four versions of the simulation, each layering an additional optimization on top of the previous stage. All versions use identical physics parameters and the same 2,660-particle dam-break initial condition to ensure a fair comparison.
 
 \subsection{Phase 1: Baseline}
-The baseline (\texttt{main\_improved.cpp}) is a straightforward single-threaded implementation using an Array of Structures (AoS) layout---each particle is a struct with position, velocity, force, density, and pressure fields. We compiled it with \texttt{-O0} (no compiler optimizations) to establish the true algorithmic cost without any help from the compiler.
+The baseline (\texttt{main\_improved.cpp}) is a single-threaded implementation using an Array of Structures (AoS) layout, in which each particle is a struct containing position, velocity, force, density, and pressure fields. It is compiled with \texttt{-O0} (no compiler optimizations) to establish the true algorithmic cost without contributions from compiler-level optimizations.
 
-This is intentionally slow. The point is to have a clean worst-case reference so we can measure how much each optimization actually helps.
+This configuration is intentionally slow. Its purpose is to provide a clean worst-case reference point against which subsequent optimizations can be measured.
 
 \subsection{Phase 2: OpenMP Multi-threading}
-The OpenMP version (\texttt{main\_omp.cpp}) keeps the same AoS layout and adds \texttt{\#pragma omp parallel for schedule(static)} to the outer \texttt{i} loop of both the density and force calculations. Since each iteration of the outer loop writes only to \texttt{particles[i]}, there are no write conflicts between threads---no locks or atomic operations needed.
+The OpenMP version (\texttt{main\_omp.cpp}) retains the AoS layout and adds \texttt{\#pragma omp parallel for schedule(static)} to the outer \texttt{i} loop of both the density and force calculations. Because each iteration of the outer loop writes only to \texttt{particles[i]}, no write conflicts arise between threads and no locks or atomic operations are required.
 
-We compiled this with \texttt{-O2} and linked against Homebrew's \texttt{libomp}. The simulation uses all 8 available threads. We also added timing instrumentation using \texttt{omp\_get\_wtime()} to measure the density and force loops separately.
+This version is compiled with \texttt{-O2} and linked against Homebrew's \texttt{libomp}. The simulation uses all 8 available hardware threads. We instrumented the density and force loops with \texttt{omp\_get\_wtime()} to obtain per-loop timing measurements.
 
 \subsection{Phase 3: NEON SIMD}
-The SIMD version (\texttt{main\_simd.cpp}) makes two changes: it restructures the data from AoS to SoA, and it vectorizes the inner \texttt{j} loop using ARM NEON intrinsics.
+The SIMD version (\texttt{main\_simd.cpp}) introduces two changes: it restructures particle data from AoS to SoA, and it vectorizes the inner \texttt{j} loop using ARM NEON intrinsics.
 
-\textbf{SoA layout.} Instead of one array of \texttt{Particle} structs, we use separate arrays: \texttt{pos\_x[]}, \texttt{pos\_y[]}, \texttt{vel\_x[]}, etc. This means when the density loop reads positions, it gets 16 consecutive \texttt{pos\_x} values per 64-byte cache line instead of just 2 (because each AoS struct is 32 bytes, and only 8 bytes of that is position data).
+\textbf{SoA layout.} Instead of a single array of \texttt{Particle} structs, we use separate arrays (\texttt{pos\_x[]}, \texttt{pos\_y[]}, \texttt{vel\_x[]}, etc.). Consequently, when the density loop reads positions, a single 64-byte cache line delivers 16 consecutive \texttt{pos\_x} values, compared to only 2 particles' worth of position data under AoS (each 32-byte struct contains only 8 bytes of position).
 
-\textbf{NEON vectorization.} The inner loop processes 4 particles at a time:
+\textbf{NEON vectorization.} The inner loop processes 4 particles per iteration using the following intrinsics:
 \begin{itemize}
     \item \texttt{vld1q\_f32}: loads 4 floats from a contiguous array
     \item \texttt{vsubq\_f32}, \texttt{vmulq\_f32}, \texttt{vmlaq\_f32}: arithmetic on 4-wide vectors
@@ -139,10 +139,10 @@ The SIMD version (\texttt{main\_simd.cpp}) makes two changes: it restructures th
 A scalar remainder loop handles the last few particles when $n$ is not a multiple of 4. This version is compiled with \texttt{-O2 -mcpu=apple-m1} and runs on a single thread.
 
 \subsection{Phase 4: Combined (SIMD + OpenMP)}
-The combined version (\texttt{main\_combined.cpp}) takes the SoA + NEON code from Phase 3 and wraps the outer \texttt{i} loop with \texttt{\#pragma omp parallel for}. Each thread runs the NEON-vectorized inner loop on its assigned chunk of particles. Since threads only write to their own particle's output fields, there are no race conditions.
+The combined version (\texttt{main\_combined.cpp}) takes the SoA + NEON code from Phase 3 and wraps the outer \texttt{i} loop with \texttt{\#pragma omp parallel for}. Each thread executes the NEON-vectorized inner loop on its assigned chunk of particles. Because threads write only to their own particle's output fields, no race conditions occur.
 
 \subsection{Experimental Setup}
-Table~\ref{tab:config} shows the fixed simulation parameters used across all benchmarks.
+Table~\ref{tab:config} lists the fixed simulation parameters used across all benchmarks.
 
 \begin{table}[h]
 \centering
@@ -162,7 +162,7 @@ Timestep ($\Delta t$) & 0.003 \\
 \end{tabular}
 \end{table}
 
-Each version was run until the simulation reached a steady state (particles settled into a puddle at the bottom). FPS was averaged across the entire session, and final particle positions were recorded to verify that the physics remained consistent across implementations.
+Each version was run until the simulation reached steady state (i.e., particles settled into a puddle at the bottom of the domain). Frame rates were averaged across the entire session, and final particle positions were recorded to verify that the physics remained consistent across implementations.
 
 \section{Results}
 
@@ -185,10 +185,10 @@ P4: Combined     & \texttt{-O2}, SoA, 8 threads    & 57.83  & 22.6$\times$ \\ \b
 \footnotesize{Note: FPS for Phases 2--4 is near the 60 FPS display cap, meaning actual compute throughput is higher than the reported frame rate suggests.}
 \end{table}
 
-A few things stand out. First, all three optimized versions hit close to 60 FPS, which is the display refresh cap---so FPS alone does not tell the full story. Second, the single-threaded SIMD version (49.69 FPS) gets about 85\% of the 8-thread OpenMP performance (58.89 FPS), which is a surprising result. Third, the combined version does not show a big FPS jump over OpenMP alone because both are already near the cap.
+Several observations emerge. First, all three optimized versions approach 60~FPS, which is the display refresh cap, so FPS alone does not tell the full story. Second, the single-threaded SIMD version (49.69~FPS) achieves roughly 85\% of the 8-thread OpenMP throughput (58.89~FPS)---a striking result given that it uses only a single core. Third, the combined version shows only a small FPS gain over OpenMP alone because both are already near the display cap.
 
 \subsection{Per-Loop Timing}
-The more useful comparison is the per-loop physics timing, which is not capped by the display. Table~\ref{tab:timings} shows the breakdown.
+A more informative comparison is the per-loop physics timing, which is not capped by the display refresh rate. Table~\ref{tab:timings} shows the breakdown.
 
 \begin{table}[h]
 \centering
@@ -202,12 +202,12 @@ P4: Combined (SoA + NEON) & 0.722  & 2.464  & 3.185  \\ \bottomrule
 \end{tabular}
 \end{table}
 
-The combined version cuts the density loop time by 5.4$\times$ compared to OpenMP alone (3.867~ms $\to$ 0.722~ms). This is where the SoA layout and NEON vectorization make the biggest difference---the density kernel reads only position data, so the cache-friendly SoA layout and 4-wide vector loads are a perfect fit.
+The combined version reduces density loop time by 5.4$\times$ compared to OpenMP alone (3.867~ms $\to$ 0.722~ms). This is where the SoA layout and NEON vectorization yield the largest benefit: the density kernel reads only position data, making the cache-friendly SoA layout and 4-wide vector loads an ideal match.
 
-The force loop, however, barely improved (2.302~ms $\to$ 2.464~ms). This is because the force kernel reads density, pressure, and velocity in addition to position, and also requires square root and reciprocal operations---there is more data dependency and less opportunity for clean vectorization.
+The force loop, by contrast, shows essentially no improvement (2.302~ms $\to$ 2.464~ms). The force kernel reads density, pressure, and velocity in addition to position, and requires square-root and reciprocal operations, introducing more data dependencies and reducing opportunities for clean vectorization.
 
 \subsection{Physics Validation}
-To confirm that optimizations did not break the physics, we compared final particle positions across all four phases:
+To confirm that optimizations did not alter the simulation behavior, we compared final particle positions across all four phases:
 
 \begin{table}[h]
 \centering
@@ -223,10 +223,10 @@ Combined  & 581.03 & 590.00 & 10--790 \\ \bottomrule
 \end{tabular}
 \end{table}
 
-All versions converge to essentially the same final state---a thin puddle along the bottom boundary spanning the full width. The small differences ($< 0.5$ pixels) come from floating-point operation reordering and the fast reciprocal approximation in NEON.
+All versions converge to essentially the same final state: a thin puddle along the bottom boundary spanning the full domain width. The small differences ($< 0.5$~pixels) arise from floating-point operation reordering under threading and from the fast reciprocal approximation used in the NEON implementation.
 
 \subsection{Baseline Scaling}
-We also ran the baseline at two different particle counts to verify the $O(n^2)$ complexity:
+We also ran the baseline at two different particle counts to verify the expected $O(n^2)$ complexity:
 
 \begin{table}[h]
 \centering
@@ -240,86 +240,86 @@ We also ran the baseline at two different particle counts to verify the $O(n^2)$
 \end{tabular}
 \end{table}
 
-The theoretical $O(n^2)$ ratio is $(2660/1500)^2 = 3.14\times$. Our measured $\sim$2.8$\times$ is close---the gap is because rendering and integration are $O(n)$ and do not scale quadratically.
+The theoretical $O(n^2)$ ratio is $(2660/1500)^2 = 3.14\times$. Our measured ratio of $\sim$2.8$\times$ is close to this prediction; the small gap is explained by the fact that rendering and integration are $O(n)$ and do not scale quadratically.
 
 \section{Analysis}
 
 \subsection{RQ1: OpenMP Speedup}
-OpenMP achieved a 23$\times$ speedup over the \texttt{-O0} baseline, reaching 58.89 FPS with 8 threads. The density and force loops---the two $O(n^2)$ bottlenecks---are embarrassingly parallel on the outer loop because each particle's computation is independent.
+OpenMP achieved a 23$\times$ speedup over the \texttt{-O0} baseline, reaching 58.89~FPS with 8 threads. The density and force loops---the two $O(n^2)$ bottlenecks---are embarrassingly parallel at the outer loop level because each particle's computation is independent of the others.
 
-It is important to note that this 23$\times$ number includes both the effect of multi-threading \emph{and} the switch from \texttt{-O0} to \texttt{-O2}. The \texttt{-O2} flag alone probably accounts for a significant portion of the speedup (through loop unrolling, better register allocation, and instruction scheduling). To isolate the pure threading contribution, we would need to run the single-threaded AoS version at \texttt{-O2} as well, which we plan to do in future work.
+It is important to note that this 23$\times$ figure includes both the effect of multi-threading \emph{and} the switch from \texttt{-O0} to \texttt{-O2}. The \texttt{-O2} flag alone likely accounts for a substantial portion of the speedup through loop unrolling, improved register allocation, and instruction scheduling. Isolating the pure threading contribution would require running the single-threaded AoS version at \texttt{-O2}, which we identify as future work.
 
-The M1's unified memory architecture helps here---all cores share the same physical memory without NUMA penalties, so thread scaling is relatively smooth. However, since the Icestorm cores run at 2.0 GHz vs.\ the Firestorm cores at 3.2 GHz, 8 threads do not give 8$\times$ scaling.
+The M1's unified memory architecture contributes to smooth thread scaling, as all cores share the same physical memory without NUMA penalties. However, because the Icestorm cores run at 2.0~GHz while the Firestorm cores run at 3.2~GHz, 8-thread scaling is sub-linear (i.e., less than 8$\times$ over a single-threaded run).
 
 \subsection{RQ2: SIMD Performance}
-Single-threaded NEON SIMD reached 49.69 FPS, which is about 85\% of the 8-thread OpenMP result. This is a striking finding: one carefully optimized core can nearly match 8 cores running unoptimized code.
+Single-threaded NEON SIMD reached 49.69~FPS, approximately 85\% of the 8-thread OpenMP result. This is a striking finding: a single carefully optimized core nearly matches 8 cores running unoptimized code.
 
-The theoretical maximum SIMD speedup for 128-bit vectors on 32-bit floats is 4$\times$, but the actual gains come from multiple sources stacked together:
+The theoretical maximum SIMD speedup for 128-bit vectors on 32-bit floats is 4$\times$, but the observed gains arise from several compounding factors:
 \begin{itemize}
     \item Processing 4 particles per inner loop iteration reduces loop overhead.
-    \item Branchless masking (\texttt{vcltq\_f32} + \texttt{vandq\_u32}) eliminates branch mispredictions that stall the pipeline.
+    \item Branchless masking (\texttt{vcltq\_f32} combined with \texttt{vandq\_u32}) eliminates branch mispredictions that would otherwise stall the pipeline.
     \item The SoA layout enables full cache-line utilization for vector loads.
     \item The \texttt{-O2} compiler flag further optimizes the surrounding scalar code.
 \end{itemize}
 
 \subsection{RQ3: AoS vs.\ SoA and Cache Efficiency}
-The memory layout change is arguably the most important optimization in this project. In AoS, each \texttt{Particle} struct is 32 bytes. A 64-byte cache line holds 2 particles. But the density kernel only needs position data (8 bytes per particle)---so 75\% of each cache line load is wasted on velocity, force, and other fields.
+The memory layout change is arguably the single most impactful optimization in this work. Under AoS, each \texttt{Particle} struct is 32~bytes, so a 64-byte cache line holds only 2 particles. Yet the density kernel reads only position data (8~bytes per particle), meaning 75\% of each cache line load is wasted on velocity, force, and other fields that are not accessed during density computation.
 
-In SoA, the \texttt{pos\_x} array is contiguous. One cache line holds 16 consecutive x-positions. The density kernel reads \texttt{pos\_x[j..j+3]} and \texttt{pos\_y[j..j+3]}---two 16-byte loads that fully utilize the data brought into cache.
+Under SoA, the \texttt{pos\_x} array is contiguous, so a single cache line holds 16 consecutive x-positions. The density kernel reads \texttt{pos\_x[j..j+3]} and \texttt{pos\_y[j..j+3]}---two 16-byte loads that fully utilize the data brought into cache.
 
-The per-loop timing data supports this. When we look at the density loop specifically---which reads only positions---the combined SoA+NEON version is 5.4$\times$ faster than the AoS OpenMP version (0.722~ms vs.\ 3.867~ms). The force loop, which accesses more fields and has less regular access patterns, shows almost no improvement.
+The per-loop timing data supports this analysis. For the density loop, which reads only positions, the combined SoA+NEON version is 5.4$\times$ faster than the AoS OpenMP version (0.722~ms vs.\ 3.867~ms). The force loop, which accesses more fields with less regular access patterns, shows essentially no improvement.
 
-The overall takeaway is that \textbf{how you lay out data in memory matters as much as, or more than, how you parallelize the computation.}
+The broader takeaway is that \textbf{how data is laid out in memory matters as much as, if not more than, how the computation is parallelized.}
 
 \subsection{RQ4: Architectural Bottlenecks}
-The bottleneck shifts as we optimize:
+The dominant bottleneck shifts as successive optimizations are applied:
 \begin{enumerate}
-    \item \textbf{Baseline:} Purely compute-bound. The \texttt{-O0} flag and scalar loops mean the CPU spends almost all its time on arithmetic for 7 million pair interactions per frame.
-    \item \textbf{OpenMP:} Still somewhat compute-bound, but the density loop (3.87~ms) being 1.7$\times$ slower than the force loop (2.30~ms) suggests memory access patterns start to matter---the density kernel touches more data per unit of computation.
-    \item \textbf{Combined:} With physics down to 3.185~ms per frame (theoretical max $\sim$313 FPS without display cap), we are approaching the memory bandwidth limit. Eight cores running SIMD all compete for the same $\sim$68 GB/s memory bus.
-    \item \textbf{Fundamental limit:} Regardless of optimization, the $O(n^2)$ algorithm itself is the ceiling. At 2,660 particles we can hit 60 FPS, but scaling to 10,000+ particles would require a fundamentally different approach like spatial hashing to reduce complexity to $O(n \cdot k)$.
+    \item \textbf{Baseline:} Purely compute-bound. With \texttt{-O0} and scalar loops, the CPU spends almost all its time on arithmetic for roughly 7 million pair interactions per frame.
+    \item \textbf{OpenMP:} Still largely compute-bound, but the density loop (3.87~ms) is 1.7$\times$ slower than the force loop (2.30~ms), indicating that memory access patterns are beginning to matter---the density kernel touches more data per unit of computation.
+    \item \textbf{Combined:} With total physics time reduced to 3.185~ms per frame (a theoretical ceiling of $\sim$313~FPS without the display cap), the simulation is approaching the memory bandwidth limit, as 8 cores running SIMD all compete for the same $\sim$68~GB/s memory bus.
+    \item \textbf{Algorithmic ceiling:} Regardless of optimization, the $O(n^2)$ algorithm itself imposes a fundamental ceiling. At 2,660 particles, 60~FPS is achievable, but scaling to 10,000 or more particles would require a fundamentally different approach, such as a spatial hash grid, to reduce the complexity to $O(n \cdot k)$, where $k$ is the average number of neighbors.
 \end{enumerate}
 
 \section{3D Extension}
-As a supplementary experiment, we extended the simulation to 3D with an interactive rotatable cube container. The 3D version uses the same SoA + NEON optimization for physics.
+As a supplementary experiment, we extended the simulation to 3D with an interactive rotatable cube container. The 3D version reuses the SoA + NEON optimizations for physics.
 
-An interesting finding here was that \emph{rendering}, not physics, became the bottleneck. Using Raylib's \texttt{DrawSphere} function (which draws a full 3D mesh per particle) gave only 18.26 FPS with 1,331 particles. After switching to a lightweight GL point rendering approach using \texttt{rlBegin(RL\_LINES)}, we achieved 58.27 FPS with 1,575 particles---a 3.2$\times$ improvement from the rendering change alone.
+An interesting finding was that \emph{rendering}, not physics, became the primary bottleneck in 3D. Using Raylib's \texttt{DrawSphere} function (which draws a full 3D mesh per particle) yielded only 18.26~FPS with 1,331 particles. Switching to a lightweight GL point rendering approach using \texttt{rlBegin(RL\_LINES)} raised performance to 58.27~FPS with 1,575 particles---a 3.2$\times$ improvement from the rendering change alone.
 
 \section{Limitations}
 
-There are several things we would do differently or add in a more thorough study:
+Several aspects of this study could be strengthened in a more thorough investigation:
 
 \begin{itemize}
-    \item \textbf{Compiler flag confound.} Our baseline uses \texttt{-O0} while the optimized versions use \texttt{-O2}. This means the reported speedup numbers include compiler optimization gains on top of the actual threading/SIMD gains. Running the baseline at \texttt{-O2} would give a cleaner comparison.
-    \item \textbf{No hardware profiling.} We did not collect cache miss rates, branch misprediction counts, or memory bandwidth numbers from hardware counters. Tools like Apple Instruments or Linux \texttt{perf} would let us verify our cache efficiency claims with hard data.
-    \item \textbf{Single particle count.} All optimized benchmarks use $n = 2660$. Testing at larger counts (5,000; 10,000; 50,000) would show where each optimization breaks down.
-    \item \textbf{No thread scaling curve.} We only tested with 8 threads. A plot of speedup vs.\ thread count (1, 2, 4, 8) would reveal whether scaling is linear or starts to plateau.
+    \item \textbf{Compiler flag confound.} The baseline uses \texttt{-O0} while the optimized versions use \texttt{-O2}, so the reported speedup figures conflate compiler optimization gains with threading and SIMD gains. Running the baseline at \texttt{-O2} would yield a cleaner comparison.
+    \item \textbf{No hardware profiling.} We did not collect cache miss rates, branch misprediction counts, or memory bandwidth measurements from hardware performance counters. Tools such as Apple Instruments or Linux \texttt{perf} would allow our cache efficiency claims to be validated with direct measurements.
+    \item \textbf{Single particle count.} All optimized benchmarks use $n = 2660$. Additional runs at larger counts (e.g., 5,000; 10,000; 50,000) would reveal where each optimization breaks down.
+    \item \textbf{No thread scaling curve.} We only tested with 8 threads. A sweep across 1, 2, 4, and 8 threads would reveal whether scaling is linear or plateaus.
 \end{itemize}
 
 \section{Future Work}
 
-The most impactful next step would be implementing a \textbf{spatial hash grid} to reduce the algorithmic complexity from $O(n^2)$ to $O(n \cdot k)$, where $k$ is the average number of neighbors per particle. This would likely give a bigger speedup than all of our current optimizations combined, especially at higher particle counts.
+The most impactful next step is implementing a \textbf{spatial hash grid} to reduce algorithmic complexity from $O(n^2)$ to $O(n \cdot k)$, where $k$ is the average number of neighbors per particle. This would likely yield larger speedups than all of our current optimizations combined, particularly at higher particle counts.
 
-Other planned work includes:
+Additional directions include:
 \begin{itemize}
-    \item Collecting hardware performance counters to validate cache efficiency analysis.
-    \item Testing scaling behavior up to 10,000+ particles.
-    \item Exploring GPU acceleration via Apple's Metal API to move the computation off the CPU entirely.
-    \item Generating benchmark comparison plots for a more visual presentation of the results.
+    \item Collecting hardware performance counters to validate the cache efficiency analysis quantitatively.
+    \item Measuring scaling behavior at 10,000 or more particles.
+    \item Exploring GPU acceleration via Apple's Metal API to move the computation entirely off the CPU.
+    \item Performing a direct comparison against compiler auto-vectorization to isolate the benefits of manual NEON tuning.
 \end{itemize}
 
 \section{Conclusion}
 
-In this project, we measured the impact of multi-threading and SIMD vectorization on a 2D SPH fluid simulation running on the Apple M1. Our main findings are:
+In this project, we measured the impact of multi-threading and SIMD vectorization on a 2D SPH fluid simulation running on the Apple M1. Our main findings are as follows:
 
 \begin{enumerate}
-    \item OpenMP multi-threading with 8 threads reaches 58.89 FPS (23$\times$ over the unoptimized baseline), bringing the physics computation to 6.169~ms per frame.
-    \item Single-threaded NEON SIMD reaches 49.69 FPS (19.4$\times$), achieving about 85\% of the 8-thread OpenMP result on just one core.
-    \item Combining both approaches reduces total physics time to 3.185~ms per frame, with the density loop specifically dropping 5.4$\times$ from the SoA restructuring.
-    \item Memory layout (AoS vs.\ SoA) has at least as much impact as the choice of parallelization strategy. The SoA transformation was essential for making SIMD effective and also improved cache utilization significantly.
+    \item OpenMP multi-threading with 8 threads reaches 58.89~FPS (23$\times$ over the unoptimized baseline), reducing the per-frame physics computation to 6.169~ms.
+    \item Single-threaded NEON SIMD reaches 49.69~FPS (19.4$\times$), achieving roughly 85\% of the 8-thread OpenMP result on a single core.
+    \item Combining both approaches reduces total physics time to 3.185~ms per frame, with the density loop alone dropping 5.4$\times$ due to SoA restructuring.
+    \item Memory layout (AoS vs.\ SoA) has at least as much impact as the choice of parallelization strategy. The SoA transformation was essential for making SIMD effective and significantly improved cache utilization.
 \end{enumerate}
 
-The key lesson we took away from this project is that optimizing \emph{how} data is accessed matters as much as optimizing \emph{how much} computation is done in parallel. A single well-optimized core with cache-friendly data layout can come close to matching many cores running on poorly structured data.
+The overarching lesson is that optimizing \emph{how} data is accessed matters as much as optimizing \emph{how much} computation is performed in parallel. A single well-optimized core with cache-friendly data layout can approach the performance of many cores operating on poorly structured data.
 
 \bibliographystyle{plain}
 \bibliography{references}

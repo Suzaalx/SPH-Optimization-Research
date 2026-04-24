@@ -1,0 +1,5 @@
+Phase,Speedup vs Baseline
+P1: Baseline,1.0
+P2: OpenMP,23.0
+P3: NEON SIMD,19.4
+P4: Combined,22.6

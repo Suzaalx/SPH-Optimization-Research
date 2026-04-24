@@ -1,0 +1,4 @@
+Loop,OpenMP AoS (ms),Combined SoA+NEON (ms)
+Density,3.867,0.722
+Force,2.302,2.464
+Total,6.169,3.185

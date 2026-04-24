@@ -1,0 +1,4 @@
+Component,OpenMP (ms),Combined (ms)
+Density Loop,3.867,0.722
+Force Loop,2.302,2.464
+Remaining (render + integration),10.498,13.614

@@ -1,0 +1,3 @@
+Version,Density Loop (ms),Improvement
+OpenMP (AoS),3.867,1.0x
+Combined (SoA + NEON),0.722,5.4x

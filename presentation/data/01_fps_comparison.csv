@@ -1,0 +1,5 @@
+Phase,Avg FPS,Layout,Threads
+P1: Baseline,2.56,AoS,1
+P2: OpenMP,58.89,AoS,8
+P3: NEON SIMD,49.69,SoA,1
+P4: Combined,57.83,SoA,8
